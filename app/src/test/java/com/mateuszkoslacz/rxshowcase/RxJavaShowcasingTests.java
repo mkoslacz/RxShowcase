@@ -9,13 +9,16 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
+import io.reactivex.Completable;
+import io.reactivex.Observable;
+import io.reactivex.Observer;
+import io.reactivex.disposables.Disposable;
+import io.reactivex.schedulers.Schedulers;
+import io.reactivex.subjects.PublishSubject;
+import io.reactivex.subjects.ReplaySubject;
 import io.realm.Realm;
 import io.realm.RealmObject;
-import rx.Observable;
-import rx.Subscriber;
-import rx.schedulers.Schedulers;
-import rx.subjects.PublishSubject;
-import rx.subjects.ReplaySubject;
+
 
 public class RxJavaShowcasingTests {
 
@@ -29,7 +32,7 @@ public class RxJavaShowcasingTests {
     public void emittingMultipleItems() throws Exception {
         List<String> stringList = Arrays.asList("first", "second", "third");
 
-        Observable.from(stringList)
+        Observable.fromIterable(stringList)
                 .subscribe(System.out::println);
 
         // what will happen if we use Observable.just ?
@@ -39,7 +42,7 @@ public class RxJavaShowcasingTests {
     public void filteringItems() throws Exception {
         List<Integer> integerList = Arrays.asList(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
 
-        Observable.from(integerList)
+        Observable.fromIterable(integerList)
                 .filter(outputInt -> outputInt % 2 == 0)
                 .subscribe(System.out::println);
 
@@ -51,25 +54,31 @@ public class RxJavaShowcasingTests {
     public void applyingFunctionToItems() throws Exception {
         List<Integer> integerList = Arrays.asList(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
 
-        Observable.from(integerList)
+        Observable.fromIterable(integerList)
                 .map(outputInt -> Math.pow(outputInt, 2))
-                .subscribe(System.out::println);
+                .subscribe(
+                        System.out::println,
+                        Throwable::printStackTrace,
+                        () -> System.out.println("completed"));
 
         // what exactly does the map function do to the stream elements?
         // what will happen if we use even numbers filter that we used in the previous test in map?
     }
 
     @Test
-    public void forkingStreams() throws Exception {
+    public void mergingStreams() throws Exception {
         List<Integer> firstIntegerList = Arrays.asList(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
         List<Integer> secondIntegerList = Arrays.asList(90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100);
         List<Integer> thirdIntegerList = Arrays.asList(990, 991, 992, 993, 994, 995, 996, 997, 998,
                 999, 1000);
         List<List<Integer>> lists = Arrays.asList(firstIntegerList, secondIntegerList, thirdIntegerList);
 
-        Observable.from(lists)
-                .flatMap(Observable::from)
+        Observable.fromIterable(lists)
+                .flatMap((list) -> Observable.fromIterable(list))
+                .subscribeOn(Schedulers.io())
+                .observeOn(Schedulers.trampoline())
                 .subscribe(System.out::println);
+        Thread.sleep(3000);
 
         // what will happen if we use the map method here?
         // what will be a "standard" implementation of that?
@@ -83,9 +92,8 @@ public class RxJavaShowcasingTests {
         List<Integer> thirdIntegerList = Arrays.asList(990, 991, 992, 993, 994, 995, 996, 997, 998,
                 999, 1000);
         List<List<Integer>> lists = Arrays.asList(firstIntegerList, secondIntegerList, thirdIntegerList);
-
-        Observable.from(lists)
-                .flatMap(Observable::from)
+        Observable.fromIterable(lists)
+                .flatMap(Observable::fromIterable)
                 .toList()
                 .subscribe(System.out::println);
     }
@@ -100,9 +108,9 @@ public class RxJavaShowcasingTests {
                 999, 1000);
         List<List<Integer>> lists = Arrays.asList(firstIntegerList, secondIntegerList, thirdIntegerList);
 
-        Observable.from(lists)
-                .flatMap(Observable::from)
-                .collect(() -> resultList, (integers, integer) -> integers.add(integer + 1))
+        Observable.fromIterable(lists)
+                .flatMap(Observable::fromIterable)
+                .collect(() -> resultList, (resultList1, integer) -> resultList1.add(integer + 100))
                 .subscribe(System.out::println);
 
         // what is the meaning of particular collect lambdas elements?
@@ -114,60 +122,31 @@ public class RxJavaShowcasingTests {
         List<String> stringList = Arrays.asList("first", "second", "third");
         long startTime = System.currentTimeMillis();
 
-        Observable.from(stringList)
+        Observable.fromIterable(stringList)
                 .map(this::doHeavyWork)
                 .subscribeOn(Schedulers.computation()) // just sent the work to nicely managed thread pool
-                .observeOn(Schedulers.immediate()) // and published it to "ui" thread
+                .observeOn(Schedulers.trampoline()) // and published it to "ui" thread
                 .subscribe(System.out::println,
                         Throwable::printStackTrace);
 
         System.out.println("Execution time: " + (System.currentTimeMillis() - startTime));
 
         // what will happen if we rem-out subscribeOn adn observeOn
-        // why doesn't it print anything?
+        // why doesn't it print anything? what to do to avoid it?
     }
 
     @Test
-    public void convertingCallbacksToObservables() throws Exception {
+    public void convertingCallbacksToCompletables() throws Exception {
         // won't work, just a concept presentation
         // [...]
         Realm realm = Realm.getDefaultInstance();
         RealmObject sampleRealmObject = (RealmObject) new Object(); // fake
 
-        Observable.create(subscriber -> {
-            realm.executeTransactionAsync(
-                    realm1 -> { // transaction
-                        realm1.copyToRealm(sampleRealmObject);
-                    },
-                    () -> { // onComplete
-                        if (subscriberIsValid(subscriber)) {
-                            // if we would like to create some objects
-                            // async and then pass them to subscriber
-//                            subscriber.onNext(someobject);
-                            subscriber.onCompleted();
-                        }
-                    },
-                    error -> { // onError
-                        if (subscriberIsValid(subscriber)) {
-                            subscriber.onError(error);
-                        }
-                    });
-        });
-    }
-
-    @Test
-    public void presentingAllKindsOfCallbacks() throws Exception {
-        List<String> stringList = Arrays.asList("first", "second", "third");
-
-        Observable.from(stringList)
-                .doOnNext(string -> System.out.println("string length: " + string.length())) // here is doOnNext
-                .subscribe(
-                        System.out::println, // onNext
-                        throwable -> System.out.println("error received! " +  // onError
-                                throwable.getClass().getName()),
-                        () -> System.out.println("Observable completed!")); // onComplete
-
-        // what will happen if we change one of the strings to null?
+        Completable.create(emitter ->
+                realm.executeTransactionAsync(
+                        realm1 -> realm1.copyToRealm(sampleRealmObject),
+                        emitter::onComplete,
+                        emitter::onError));
     }
 
     @Test
@@ -175,15 +154,20 @@ public class RxJavaShowcasingTests {
         List<String> stringList = Arrays.asList("first", "second", "third");
         List<String> secondStringList = Arrays.asList("A", "B", "C");
 
-        Observable<String> firstListObservable = Observable.from(stringList)
-                .map(this::doHeavyWork); // this one emits items pretty slowly
+        Observable<String> firstListObservable = Observable.fromIterable(stringList) // this one emits items pretty slowly
+                .subscribeOn(Schedulers.io())
+                .map(this::doHeavyWork);
 
-        Observable<String> secondListObservable = Observable.from(secondStringList); // this one is quick
+        Observable<String> secondListObservable = Observable.fromIterable(secondStringList) // this one is quick
+                .subscribeOn(Schedulers.io());
 
         Observable.zip(firstListObservable, secondListObservable,
                 (stringFromFirstList, stringFromSecondList) -> // onNext
                         stringFromFirstList + " and zipped with " + stringFromSecondList)
                 .subscribe(System.out::println); // synchronized!
+
+        Thread.sleep(5000);
+
     }
 
     @Test
@@ -212,36 +196,45 @@ public class RxJavaShowcasingTests {
         userButtonClicksFromUi.subscribe(magicHappensHere);
         // end of view init (some actions happen from now)
 
-        //presenter long init
-        Subscriber<Long> presenterThatInitializesSlowly = new Subscriber<Long>() {
+        //fake presenter
+        Observer<Long> observer = new Observer<Long>() {
             @Override
-            public void onCompleted() {
-                //stub
+            public void onSubscribe(Disposable d) {
+
+            }
+
+            @Override
+            public void onNext(Long value) {
+                System.out.println("presenter received " + value);
+
             }
 
             @Override
             public void onError(Throwable e) {
-                //stub
+
             }
 
             @Override
-            public void onNext(Long aLong) {
-                System.out.println("presenter received " + aLong);
+            public void onComplete() {
+
             }
         };
+
 
         Thread.sleep(1000); // fake long initialization
         //end of presenter init
 
         System.out.println("subscribing to ReplaySubject...");
-        magicHappensHere.subscribe(presenterThatInitializesSlowly); // all cached!
+        magicHappensHere.subscribe(observer); // all cached!
 
         Thread.sleep(1000);
     }
 
-    private boolean subscriberIsValid(Subscriber<? super Object> subscriber) {
-        return subscriber != null && !subscriber.isUnsubscribed();
-    }
+
+    ///////////////////////////////////////////////////////////////////////////
+    // THE END
+    ///////////////////////////////////////////////////////////////////////////
+
 
     private String doHeavyWork(String input) {
         try {
